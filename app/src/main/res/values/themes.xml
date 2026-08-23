@@ -1,0 +1,4 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- ثيم مخفي بدون شريط علوي، لأننا سنصمم كل شيء بـ Compose -->
+    <style name="Theme.MibroAI" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
