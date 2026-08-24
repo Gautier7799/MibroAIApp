@@ -35,10 +35,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
-import com.google.ai.client.generativeai.GenerativeModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
@@ -121,7 +124,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 if (!matches.isNullOrEmpty()) {
                     val text = matches[0]
                     recognizedText.value = text
-                    askGemini(text) 
+                    askGeminiDirectly(text) 
                 }
             }
             override fun onPartialResults(partialResults: Bundle?) {}
@@ -129,7 +132,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         })
     }
 
-    private fun askGemini(userText: String) {
+    // هنا السحر! تجاوزنا مكتبة جوجل واستخدمنا الاتصال المباشر لضمان نجاح أي مفتاح
+    private fun askGeminiDirectly(userText: String) {
         if (apiKey.value.isEmpty()) {
             aiResponseText.value = "يرجى إدخال مفتاح API في التطبيق أولاً!"
             return
@@ -140,22 +144,46 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // التعديل هنا: استخدمنا الموديل الأساسي المضمون
-                val generativeModel = GenerativeModel(
-                    modelName = "gemini-pro",
-                    apiKey = apiKey.value
-                )
-                
+                val key = apiKey.value.trim()
+                // نستخدم v1beta مباشرة لضمان التعرف على الموديل
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$key")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+
                 val prompt = "أنت مساعد صوتي ذكي. أجب باللغة العربية بشكل مختصر جداً ومفيد لتتم قراءته صوتياً. المستخدم يقول: $userText"
                 
-                val response = generativeModel.generateContent(prompt)
-                val replyText = response.text ?: "عذراً، لم أتمكن من إيجاد إجابة."
-                
+                val part = JSONObject().apply { put("text", prompt) }
+                val parts = JSONArray().apply { put(part) }
+                val content = JSONObject().apply { put("parts", parts) }
+                val contents = JSONArray().apply { put(content) }
+                val jsonBody = JSONObject().apply { put("contents", contents) }
+
+                conn.outputStream.use { os ->
+                    val input = jsonBody.toString().toByteArray(Charsets.UTF_8)
+                    os.write(input, 0, input.size)
+                }
+
+                val responseCode = conn.responseCode
+                val replyText = if (responseCode == 200) {
+                    val responseStr = conn.inputStream.bufferedReader().use { it.readText() }
+                    val responseJson = JSONObject(responseStr)
+                    val candidates = responseJson.getJSONArray("candidates")
+                    val firstCandidate = candidates.getJSONObject(0)
+                    val contentObj = firstCandidate.getJSONObject("content")
+                    val partsArr = contentObj.getJSONArray("parts")
+                    partsArr.getJSONObject(0).getString("text")
+                } else {
+                    val errorStr = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
+                    "خطأ من جوجل: $errorStr"
+                }
+
                 withContext(Dispatchers.Main) {
                     isThinking.value = false
                     aiResponseText.value = replyText
                     
-                    if (isTtsReady) {
+                    if (responseCode == 200 && isTtsReady) {
                         val paramsTts = Bundle()
                         paramsTts.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
                         textToSpeech?.speak(replyText, TextToSpeech.QUEUE_FLUSH, paramsTts, "AI_REPLY")
@@ -164,9 +192,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     isThinking.value = false
-                    val errorMessage = e.localizedMessage ?: e.toString()
-                    aiResponseText.value = "الرد: الخطأ: $errorMessage"
-                    Log.e("MibroAI", "Gemini Error", e)
+                    aiResponseText.value = "حدث خطأ في الشبكة: ${e.message}"
                 }
             }
         }
@@ -327,7 +353,7 @@ fun MainScreen(
                 
                 if (aiResponse.isNotEmpty()) {
                     Text(
-                        text = "$aiResponse",
+                        text = aiResponse,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color.White,
