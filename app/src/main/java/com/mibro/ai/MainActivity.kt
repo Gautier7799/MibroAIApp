@@ -89,7 +89,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     isThinking = isThinking.value,
                     apiKey = apiKey.value,
                     onApiKeyChanged = { newKey ->
-                        // التأكد من إزالة أي مسافات فارغة بالخطأ عند النسخ
                         val cleanKey = newKey.trim()
                         apiKey.value = cleanKey
                         prefs.edit().putString("gemini_key", cleanKey).apply()
@@ -141,8 +140,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                // التعديل هنا: استخدمنا الموديل الأساسي المضمون
                 val generativeModel = GenerativeModel(
-                    modelName = "gemini-1.5-flash",
+                    modelName = "gemini-pro",
                     apiKey = apiKey.value
                 )
                 
@@ -164,9 +164,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     isThinking.value = false
-                    // هنا سيطبع لك الخطأ الحقيقي بالضبط لنعرف المشكلة
                     val errorMessage = e.localizedMessage ?: e.toString()
-                    aiResponseText.value = "الخطأ: $errorMessage"
+                    aiResponseText.value = "الرد: الخطأ: $errorMessage"
                     Log.e("MibroAI", "Gemini Error", e)
                 }
             }
@@ -328,7 +327,7 @@ fun MainScreen(
                 
                 if (aiResponse.isNotEmpty()) {
                     Text(
-                        text = "الرد: $aiResponse",
+                        text = "$aiResponse",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color.White,
