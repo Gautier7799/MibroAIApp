@@ -132,7 +132,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         })
     }
 
-    // هنا السحر! تجاوزنا مكتبة جوجل واستخدمنا الاتصال المباشر لضمان نجاح أي مفتاح
     private fun askGeminiDirectly(userText: String) {
         if (apiKey.value.isEmpty()) {
             aiResponseText.value = "يرجى إدخال مفتاح API في التطبيق أولاً!"
@@ -140,13 +139,69 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         isThinking.value = true
-        aiResponseText.value = "جاري التفكير..."
+        aiResponseText.value = "جاري البحث عن الموديل المناسب لك..."
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val key = apiKey.value.trim()
-                // نستخدم v1beta مباشرة لضمان التعرف على الموديل
-                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$key")
+                var targetModel = "gemini-1.5-flash" 
+                var availableModelsDebug = ""
+
+                // 1. الاتصال بجوجل لسؤالها عن الموديلات المتاحة لمفتاحك
+                val listUrl = URL("https://generativelanguage.googleapis.com/v1beta/models?key=$key")
+                val listConn = listUrl.openConnection() as HttpURLConnection
+                listConn.requestMethod = "GET"
+
+                if (listConn.responseCode == 200) {
+                    val responseStr = listConn.inputStream.bufferedReader().use { it.readText() }
+                    val json = JSONObject(responseStr)
+                    val models = json.getJSONArray("models")
+                    var foundValidModel = false
+
+                    // فحص جميع الموديلات واختيار الأفضل تلقائياً
+                    for (i in 0 until models.length()) {
+                        val model = models.getJSONObject(i)
+                        val name = model.getString("name") 
+                        availableModelsDebug += "$name, \n"
+                        
+                        if (model.has("supportedGenerationMethods")) {
+                            val methods = model.getJSONArray("supportedGenerationMethods")
+                            for (j in 0 until methods.length()) {
+                                if (methods.getString(j) == "generateContent") {
+                                    if (name.contains("gemini")) {
+                                        targetModel = name.replace("models/", "")
+                                        foundValidModel = true
+                                        // إذا وجد 1.5 سيعتمده فوراً
+                                        if (name.contains("1.5")) break
+                                    }
+                                }
+                            }
+                        }
+                        if (foundValidModel && targetModel.contains("1.5")) break
+                    }
+                    
+                    if (!foundValidModel) {
+                        withContext(Dispatchers.Main) {
+                            isThinking.value = false
+                            aiResponseText.value = "مفتاحك لا يدعم المحادثة! المتاح لك هو:\n$availableModelsDebug"
+                        }
+                        return@launch
+                    }
+                } else {
+                    val errorStr = listConn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
+                    withContext(Dispatchers.Main) {
+                        isThinking.value = false
+                        aiResponseText.value = "فشل في التحقق من المفتاح:\n$errorStr"
+                    }
+                    return@launch
+                }
+
+                withContext(Dispatchers.Main) {
+                    aiResponseText.value = "تم إيجاد الموديل ($targetModel).. جاري التفكير..."
+                }
+
+                // 2. الاتصال بالموديل الذي اخترناه تلقائياً
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$key")
                 val conn = url.openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.setRequestProperty("Content-Type", "application/json")
@@ -176,7 +231,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     partsArr.getJSONObject(0).getString("text")
                 } else {
                     val errorStr = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
-                    "خطأ من جوجل: $errorStr"
+                    "خطأ أثناء المحادثة:\n$errorStr"
                 }
 
                 withContext(Dispatchers.Main) {
