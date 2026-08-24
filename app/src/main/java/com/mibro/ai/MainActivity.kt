@@ -53,7 +53,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private val aiResponseText = mutableStateOf("")
     private val isThinking = mutableStateOf(false)
     
-    // مفتاح API سيتم حفظه تلقائياً
     private var apiKey = mutableStateOf("")
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -63,7 +62,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // جلب المفتاح المحفوظ سابقاً لكي لا تضطر للصقه كل مرة
         val prefs = getSharedPreferences("MibroPrefs", Context.MODE_PRIVATE)
         apiKey.value = prefs.getString("gemini_key", "") ?: ""
 
@@ -91,8 +89,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     isThinking = isThinking.value,
                     apiKey = apiKey.value,
                     onApiKeyChanged = { newKey ->
-                        apiKey.value = newKey
-                        prefs.edit().putString("gemini_key", newKey).apply()
+                        // التأكد من إزالة أي مسافات فارغة بالخطأ عند النسخ
+                        val cleanKey = newKey.trim()
+                        apiKey.value = cleanKey
+                        prefs.edit().putString("gemini_key", cleanKey).apply()
                     },
                     onActivateClicked = {
                         setupMediaSession()
@@ -164,7 +164,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     isThinking.value = false
-                    aiResponseText.value = "حدث خطأ في الاتصال بالإنترنت أو بالمفتاح."
+                    // هنا سيطبع لك الخطأ الحقيقي بالضبط لنعرف المشكلة
+                    val errorMessage = e.localizedMessage ?: e.toString()
+                    aiResponseText.value = "الخطأ: $errorMessage"
                     Log.e("MibroAI", "Gemini Error", e)
                 }
             }
@@ -272,7 +274,6 @@ fun MainScreen(
         Text(text = "Mibro AI Assistant", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
         Spacer(modifier = Modifier.height(16.dp))
 
-        // مربع نص للصق مفتاح Gemini مباشرة من الهاتف
         OutlinedTextField(
             value = apiKey,
             onValueChange = onApiKeyChanged,
@@ -343,8 +344,6 @@ fun MainScreen(
                             if (apiKey.isNotEmpty()) {
                                 isActive = true
                                 onActivateClicked()
-                            } else {
-                                // تنبيه إذا نسي المستخدم وضع المفتاح
                             }
                         },
                         modifier = Modifier.height(56.dp).fillMaxWidth(),
