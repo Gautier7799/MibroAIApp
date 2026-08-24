@@ -34,6 +34,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
+import com.google.ai.client.generativeai.GenerativeModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
@@ -43,9 +48,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var speechRecognizer: SpeechRecognizer? = null
     private var isTtsReady = false
     
-    // حالات واجهة المستخدم
     private val isEarbudActive = mutableStateOf(false)
-    private val recognizedText = mutableStateOf("لم تقل شيئاً بعد...")
+    private val recognizedText = mutableStateOf("اضغط للتحدث...")
+    private val aiResponseText = mutableStateOf("")
+    private val isThinking = mutableStateOf(false)
+    
+    // مفتاح API سيتم حفظه تلقائياً
+    private var apiKey = mutableStateOf("")
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -54,16 +63,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        // جلب المفتاح المحفوظ سابقاً لكي لا تضطر للصقه كل مرة
+        val prefs = getSharedPreferences("MibroPrefs", Context.MODE_PRIVATE)
+        apiKey.value = prefs.getString("gemini_key", "") ?: ""
+
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.INTERNET)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
         requestPermissionLauncher.launch(permissions.toTypedArray())
 
-        // 1. تهيئة النطق (TTS)
         textToSpeech = TextToSpeech(this, this)
-        
-        // 2. تهيئة الاستماع (Speech to Text)
         setupSpeechRecognizer()
 
         setContent {
@@ -77,9 +87,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 MainScreen(
                     isEarbudClicked = isEarbudActive.value,
                     recognizedText = recognizedText.value,
+                    aiResponse = aiResponseText.value,
+                    isThinking = isThinking.value,
+                    apiKey = apiKey.value,
+                    onApiKeyChanged = { newKey ->
+                        apiKey.value = newKey
+                        prefs.edit().putString("gemini_key", newKey).apply()
+                    },
                     onActivateClicked = {
                         setupMediaSession()
-                        Toast.makeText(this, "تم تفعيل النظام! المس سماعتك وتحدث.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "النظام مفعل! المس سماعتك وتحدث.", Toast.LENGTH_LONG).show()
                     }
                 )
             }
@@ -99,26 +116,59 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 Log.e("MibroAI", "Speech error: $error")
             }
 
-            // هنا نستلم النص بعد أن ينتهي المستخدم من الكلام
             override fun onResults(results: Bundle?) {
                 isEarbudActive.value = false
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (!matches.isNullOrEmpty()) {
                     val text = matches[0]
-                    recognizedText.value = text // عرض النص على الشاشة
-                    Log.d("MibroAI", "المستخدم قال: $text")
-                    
-                    // نطق ما قاله المستخدم (للتأكد من نجاح العملية قبل ربط Gemini)
-                    if (isTtsReady) {
-                        val paramsTts = Bundle()
-                        paramsTts.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
-                        textToSpeech?.speak("لقد قلت: $text", TextToSpeech.QUEUE_FLUSH, paramsTts, "AI_REPEAT")
-                    }
+                    recognizedText.value = text
+                    askGemini(text) 
                 }
             }
             override fun onPartialResults(partialResults: Bundle?) {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
+    }
+
+    private fun askGemini(userText: String) {
+        if (apiKey.value.isEmpty()) {
+            aiResponseText.value = "يرجى إدخال مفتاح API في التطبيق أولاً!"
+            return
+        }
+
+        isThinking.value = true
+        aiResponseText.value = "جاري التفكير..."
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val generativeModel = GenerativeModel(
+                    modelName = "gemini-1.5-flash",
+                    apiKey = apiKey.value
+                )
+                
+                val prompt = "أنت مساعد صوتي ذكي. أجب باللغة العربية بشكل مختصر جداً ومفيد لتتم قراءته صوتياً. المستخدم يقول: $userText"
+                
+                val response = generativeModel.generateContent(prompt)
+                val replyText = response.text ?: "عذراً، لم أتمكن من إيجاد إجابة."
+                
+                withContext(Dispatchers.Main) {
+                    isThinking.value = false
+                    aiResponseText.value = replyText
+                    
+                    if (isTtsReady) {
+                        val paramsTts = Bundle()
+                        paramsTts.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                        textToSpeech?.speak(replyText, TextToSpeech.QUEUE_FLUSH, paramsTts, "AI_REPLY")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    isThinking.value = false
+                    aiResponseText.value = "حدث خطأ في الاتصال بالإنترنت أو بالمفتاح."
+                    Log.e("MibroAI", "Gemini Error", e)
+                }
+            }
+        }
     }
 
     private fun requestAudioFocus() {
@@ -156,19 +206,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun handleEarbudClick() {
-        // نمنع تشغيل الاستماع إذا كان يعمل مسبقاً
-        if (isEarbudActive.value) return 
+        if (isEarbudActive.value || isThinking.value) return 
 
         Handler(Looper.getMainLooper()).post {
             isEarbudActive.value = true
+            aiResponseText.value = "" 
             
-            // رنة لتأكيد استلام اللمسة
             try {
                 val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
                 toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
             } catch (e: Exception) { e.printStackTrace() }
 
-            // بدء الاستماع للميكروفون باللغة العربية
             val speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
@@ -195,12 +243,21 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(isEarbudClicked: Boolean, recognizedText: String, onActivateClicked: () -> Unit) {
+fun MainScreen(
+    isEarbudClicked: Boolean, 
+    recognizedText: String, 
+    aiResponse: String, 
+    isThinking: Boolean,
+    apiKey: String,
+    onApiKeyChanged: (String) -> Unit,
+    onActivateClicked: () -> Unit
+) {
     var isActive by remember { mutableStateOf(false) }
     
     val cardColor by animateColorAsState(
-        targetValue = if (isEarbudClicked) Color(0xFF004D40) else MaterialTheme.colorScheme.surface,
+        targetValue = if (isEarbudClicked || isThinking) Color(0xFF004D40) else MaterialTheme.colorScheme.surface,
         label = "CardColor"
     )
 
@@ -208,15 +265,33 @@ fun MainScreen(isEarbudClicked: Boolean, recognizedText: String, onActivateClick
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp),
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(40.dp))
-        Text(text = "Mibro الذكي", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Spacer(modifier = Modifier.height(60.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(text = "Mibro AI Assistant", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // مربع نص للصق مفتاح Gemini مباشرة من الهاتف
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = onApiKeyChanged,
+            label = { Text("Gemini API Key") },
+            placeholder = { Text("الصق مفتاحك هنا...") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                focusedLabelColor = MaterialTheme.colorScheme.primary,
+                unfocusedTextColor = Color.White,
+                focusedTextColor = Color.White
+            )
+        )
+        
+        Spacer(modifier = Modifier.height(16.dp))
 
         Card(
-            modifier = Modifier.fillMaxWidth().height(260.dp),
+            modifier = Modifier.fillMaxWidth().weight(1f),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = cardColor)
         ) {
@@ -227,38 +302,59 @@ fun MainScreen(isEarbudClicked: Boolean, recognizedText: String, onActivateClick
             ) {
                 if (isEarbudClicked) {
                     Text(text = "🎤 تحدث الآن...", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                } else if (isThinking) {
+                    Text(text = "🧠 جاري التفكير...", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 } else {
                     Text(
-                        text = if (isActive) "جاهز! المس سماعتك للتحدث" else "المساعد متوقف",
+                        text = if (isActive) "جاهز! المس سماعتك واسألني" else "المساعد متوقف",
                         fontSize = 20.sp,
                         color = if (isActive) MaterialTheme.colorScheme.primary else Color.White
                     )
                 }
                 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
                 
-                // عرض النص الذي تم فهمه من المستخدم
-                Text(
-                    text = recognizedText,
-                    fontSize = 18.sp,
-                    color = Color.LightGray,
-                    textAlign = TextAlign.Center
-                )
+                if (recognizedText.isNotEmpty() && isActive) {
+                    Text(
+                        text = "أنت: $recognizedText",
+                        fontSize = 18.sp,
+                        color = Color.LightGray,
+                        textAlign = TextAlign.Center
+                    )
+                }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 
-                if (!isEarbudClicked && !isActive) {
+                if (aiResponse.isNotEmpty()) {
+                    Text(
+                        text = "الرد: $aiResponse",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                if (!isEarbudClicked && !isActive && !isThinking) {
                     Button(
                         onClick = {
-                            isActive = true
-                            onActivateClicked()
+                            if (apiKey.isNotEmpty()) {
+                                isActive = true
+                                onActivateClicked()
+                            } else {
+                                // تنبيه إذا نسي المستخدم وضع المفتاح
+                            }
                         },
-                        modifier = Modifier.height(56.dp).fillMaxWidth()
+                        modifier = Modifier.height(56.dp).fillMaxWidth(),
+                        enabled = apiKey.isNotEmpty()
                     ) {
-                        Text(text = "تفعيل الاستماع", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text(text = "تفعيل المساعد الذكي", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
