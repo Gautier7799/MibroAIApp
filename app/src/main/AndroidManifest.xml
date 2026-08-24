@@ -12,12 +12,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- أضفنا الأيقونة الخاصة بك هنا -->
+    <!-- قمنا بحذف سطر الأيقونة المخصصة مؤقتاً لتجاوز خطأ البناء -->
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
         android:label="Mibro AI"
-        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.MibroAI"
         tools:targetApi="31">
