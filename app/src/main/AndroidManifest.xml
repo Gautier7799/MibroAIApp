@@ -10,11 +10,14 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- التعديل هنا: حذفنا طلب أيقونة مخصصة، واستخدمنا أيقونة أندرويد الافتراضية -->
+    <!-- أضفنا الأيقونة الخاصة بك هنا -->
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
         android:label="Mibro AI"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.MibroAI"
         tools:targetApi="31">
