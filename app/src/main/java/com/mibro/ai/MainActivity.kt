@@ -2,12 +2,17 @@ package com.mibro.ai
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -26,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
@@ -34,8 +40,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private var mediaSession: MediaSessionCompat? = null
     private var textToSpeech: TextToSpeech? = null
+    private var speechRecognizer: SpeechRecognizer? = null
     private var isTtsReady = false
+    
+    // حالات واجهة المستخدم
     private val isEarbudActive = mutableStateOf(false)
+    private val recognizedText = mutableStateOf("لم تقل شيئاً بعد...")
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -50,7 +60,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
         requestPermissionLauncher.launch(permissions.toTypedArray())
 
+        // 1. تهيئة النطق (TTS)
         textToSpeech = TextToSpeech(this, this)
+        
+        // 2. تهيئة الاستماع (Speech to Text)
+        setupSpeechRecognizer()
 
         setContent {
             MaterialTheme(
@@ -62,20 +76,55 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             ) {
                 MainScreen(
                     isEarbudClicked = isEarbudActive.value,
+                    recognizedText = recognizedText.value,
                     onActivateClicked = {
                         setupMediaSession()
-                        Toast.makeText(this, "تم اختطاف الصوت! المس سماعتك الآن.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "تم تفعيل النظام! المس سماعتك وتحدث.", Toast.LENGTH_LONG).show()
                     }
                 )
             }
         }
     }
 
+    private fun setupSpeechRecognizer() {
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onError(error: Int) {
+                isEarbudActive.value = false
+                Log.e("MibroAI", "Speech error: $error")
+            }
+
+            // هنا نستلم النص بعد أن ينتهي المستخدم من الكلام
+            override fun onResults(results: Bundle?) {
+                isEarbudActive.value = false
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    val text = matches[0]
+                    recognizedText.value = text // عرض النص على الشاشة
+                    Log.d("MibroAI", "المستخدم قال: $text")
+                    
+                    // نطق ما قاله المستخدم (للتأكد من نجاح العملية قبل ربط Gemini)
+                    if (isTtsReady) {
+                        val paramsTts = Bundle()
+                        paramsTts.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                        textToSpeech?.speak("لقد قلت: $text", TextToSpeech.QUEUE_FLUSH, paramsTts, "AI_REPEAT")
+                    }
+                }
+            }
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+    }
+
     private fun requestAudioFocus() {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .build()
+            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).build()
             audioManager.requestAudioFocus(focusRequest)
         } else {
             @Suppress("DEPRECATION")
@@ -85,24 +134,19 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun setupMediaSession() {
         if (mediaSession != null) return
-
-        // 1. طلب السيطرة على الصوت من نظام الأندرويد
         requestAudioFocus()
 
         mediaSession = MediaSessionCompat(this, "MibroAISession").apply {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
-            
-            // 2. خداع النظام بأننا "نعزف الموسيقى الآن" لكي يرسل اللمسات إلينا
             val stateBuilder = PlaybackStateCompat.Builder()
                 .setActions(PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_PLAY_PAUSE)
                 .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1.0f)
-            
             setPlaybackState(stateBuilder.build())
 
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() { handleEarbudClick() }
                 override fun onPause() { handleEarbudClick() }
-                override fun onMediaButtonEvent(mediaButtonEvent: android.content.Intent?): Boolean {
+                override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
                     handleEarbudClick()
                     return super.onMediaButtonEvent(mediaButtonEvent)
                 }
@@ -112,20 +156,24 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun handleEarbudClick() {
-        Log.d("MibroAI", "تم التقاط اللمسة!")
-        
+        // نمنع تشغيل الاستماع إذا كان يعمل مسبقاً
+        if (isEarbudActive.value) return 
+
         Handler(Looper.getMainLooper()).post {
             isEarbudActive.value = true
+            
+            // رنة لتأكيد استلام اللمسة
+            try {
+                val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+                toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
+            } catch (e: Exception) { e.printStackTrace() }
 
-            if (isTtsReady) {
-                textToSpeech?.speak("مرحباً، أنا أستمع إليك", TextToSpeech.QUEUE_FLUSH, null, "AI_GREETING")
-            } else {
-                Toast.makeText(this@MainActivity, "محرك النطق غير جاهز", Toast.LENGTH_SHORT).show()
+            // بدء الاستماع للميكروفون باللغة العربية
+            val speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-SA")
             }
-
-            Handler(Looper.getMainLooper()).postDelayed({
-                isEarbudActive.value = false
-            }, 2000)
+            speechRecognizer?.startListening(speechIntent)
         }
     }
 
@@ -141,13 +189,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         super.onDestroy()
         mediaSession?.release()
+        speechRecognizer?.destroy()
         textToSpeech?.stop()
         textToSpeech?.shutdown()
     }
 }
 
 @Composable
-fun MainScreen(isEarbudClicked: Boolean, onActivateClicked: () -> Unit) {
+fun MainScreen(isEarbudClicked: Boolean, recognizedText: String, onActivateClicked: () -> Unit) {
     var isActive by remember { mutableStateOf(false) }
     
     val cardColor by animateColorAsState(
@@ -167,20 +216,20 @@ fun MainScreen(isEarbudClicked: Boolean, onActivateClicked: () -> Unit) {
         Spacer(modifier = Modifier.height(60.dp))
 
         Card(
-            modifier = Modifier.fillMaxWidth().height(220.dp),
+            modifier = Modifier.fillMaxWidth().height(260.dp),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = cardColor)
         ) {
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 if (isEarbudClicked) {
-                    Text(text = "🎤 أستمع إليك الآن...", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(text = "🎤 تحدث الآن...", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 } else {
                     Text(
-                        text = if (isActive) "جاهز! المس سماعتك الآن" else "المساعد متوقف",
+                        text = if (isActive) "جاهز! المس سماعتك للتحدث" else "المساعد متوقف",
                         fontSize = 20.sp,
                         color = if (isActive) MaterialTheme.colorScheme.primary else Color.White
                     )
@@ -188,13 +237,23 @@ fun MainScreen(isEarbudClicked: Boolean, onActivateClicked: () -> Unit) {
                 
                 Spacer(modifier = Modifier.height(24.dp))
                 
-                if (!isEarbudClicked) {
+                // عرض النص الذي تم فهمه من المستخدم
+                Text(
+                    text = recognizedText,
+                    fontSize = 18.sp,
+                    color = Color.LightGray,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                if (!isEarbudClicked && !isActive) {
                     Button(
                         onClick = {
                             isActive = true
                             onActivateClicked()
                         },
-                        modifier = Modifier.height(56.dp).padding(horizontal = 32.dp)
+                        modifier = Modifier.height(56.dp).fillMaxWidth()
                     ) {
                         Text(text = "تفعيل الاستماع", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
