@@ -3,6 +3,8 @@ package com.mibro.ai
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -11,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,26 +32,25 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var mediaSession: MediaSessionCompat? = null
     private var textToSpeech: TextToSpeech? = null
     private var isTtsReady = false
+    
+    // حالة لتتبع ضغطة السماعة وربطها بالواجهة
+    private val isEarbudActive = mutableStateOf(false)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions[Manifest.permission.RECORD_AUDIO] == true) {
-            Toast.makeText(this, "صلاحيات الميكروفون ممنوحة", Toast.LENGTH_SHORT).show()
-        }
+        // طلب الصلاحيات
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // طلب الصلاحيات
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
         requestPermissionLauncher.launch(permissions.toTypedArray())
 
-        // تجهيز محرك النطق
         textToSpeech = TextToSpeech(this, this)
 
         setContent {
@@ -60,6 +62,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 )
             ) {
                 MainScreen(
+                    isEarbudClicked = isEarbudActive.value,
                     onActivateClicked = {
                         setupMediaSession()
                         Toast.makeText(this, "الاستماع مفعل! اضغط زر السماعة الآن.", Toast.LENGTH_LONG).show()
@@ -69,7 +72,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // هنا السحر: اختطاف السماعة داخل الواجهة نفسها
     private fun setupMediaSession() {
         if (mediaSession != null) return
 
@@ -81,21 +83,34 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             setPlaybackState(stateBuilder.build())
 
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() {
-                    handleEarbudClick()
-                }
-                override fun onPause() {
-                    handleEarbudClick()
-                }
+                override fun onPlay() { handleEarbudClick() }
+                override fun onPause() { handleEarbudClick() }
             })
             isActive = true
         }
     }
 
+    // هذه الدالة تعمل عند الضغط على السماعة
     private fun handleEarbudClick() {
         Log.d("MibroAI", "تم ضغط السماعة!")
-        if (isTtsReady) {
-            textToSpeech?.speak("مرحباً، أنا أستمع إليك", TextToSpeech.QUEUE_FLUSH, null, "AI_GREETING")
+        
+        // تشغيل التعديلات البصرية على الواجهة (UI Thread)
+        Handler(Looper.getMainLooper()).post {
+            // إظهار المؤشر البصري
+            isEarbudActive.value = true
+            Toast.makeText(this@MainActivity, "تم التقاط ضغطة السماعة! 🎧", Toast.LENGTH_SHORT).show()
+
+            // محاولة النطق
+            if (isTtsReady) {
+                textToSpeech?.speak("مرحباً، أنا أستمع إليك", TextToSpeech.QUEUE_FLUSH, null, "AI_GREETING")
+            } else {
+                Toast.makeText(this@MainActivity, "تنبيه: محرك النطق العربي غير جاهز في هاتفك", Toast.LENGTH_LONG).show()
+            }
+
+            // إخفاء المؤشر البصري بعد ثانيتين
+            Handler(Looper.getMainLooper()).postDelayed({
+                isEarbudActive.value = false
+            }, 2000)
         }
     }
 
@@ -117,8 +132,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 }
 
 @Composable
-fun MainScreen(onActivateClicked: () -> Unit) {
+fun MainScreen(isEarbudClicked: Boolean, onActivateClicked: () -> Unit) {
     var isActive by remember { mutableStateOf(false) }
+    
+    // تغيير لون البطاقة إذا تم ضغط السماعة
+    val cardColor by animateColorAsState(
+        targetValue = if (isEarbudClicked) Color(0xFF004D40) else MaterialTheme.colorScheme.surface,
+        label = "CardColor"
+    )
 
     Column(
         modifier = Modifier
@@ -132,29 +153,38 @@ fun MainScreen(onActivateClicked: () -> Unit) {
         Spacer(modifier = Modifier.height(60.dp))
 
         Card(
-            modifier = Modifier.fillMaxWidth().height(200.dp),
+            modifier = Modifier.fillMaxWidth().height(220.dp),
             shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            colors = CardDefaults.cardColors(containerColor = cardColor)
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = if (isActive) "جاهز! جرب ضغط سماعتك" else "المساعد متوقف",
-                    fontSize = 20.sp,
-                    color = if (isActive) MaterialTheme.colorScheme.primary else Color.White
-                )
+                // تغيير النص عند ضغط السماعة
+                if (isEarbudClicked) {
+                    Text(text = "🎤 أستمع إليك الآن...", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                } else {
+                    Text(
+                        text = if (isActive) "جاهز! جرب ضغط سماعتك" else "المساعد متوقف",
+                        fontSize = 20.sp,
+                        color = if (isActive) MaterialTheme.colorScheme.primary else Color.White
+                    )
+                }
+                
                 Spacer(modifier = Modifier.height(24.dp))
-                Button(
-                    onClick = {
-                        isActive = true
-                        onActivateClicked()
-                    },
-                    modifier = Modifier.height(56.dp).padding(horizontal = 32.dp)
-                ) {
-                    Text(text = "تفعيل الاستماع", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                
+                if (!isEarbudClicked) {
+                    Button(
+                        onClick = {
+                            isActive = true
+                            onActivateClicked()
+                        },
+                        modifier = Modifier.height(56.dp).padding(horizontal = 32.dp)
+                    ) {
+                        Text(text = "تفعيل الاستماع", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
