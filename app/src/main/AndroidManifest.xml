@@ -8,8 +8,6 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Mibro AI"
         android:supportsRtl="true"
         android:theme="@style/Theme.MibroAI"
@@ -21,6 +19,7 @@
             android:theme="@style/Theme.MibroAI">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+                <!-- هذا هو السطر الصحيح الذي سيظهر التطبيق على الشاشة -->
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
